@@ -10,15 +10,15 @@ from homeassistant.components.bluetooth import (
     async_discovered_service_info,
 )
 from homeassistant.config_entries import ConfigFlow
-from homeassistant.const import (CONF_ADDRESS, CONF_MODEL, CONF_API_KEY, CONF_TYPE)
+from homeassistant.const import CONF_ADDRESS, CONF_MODEL, CONF_API_KEY
 from homeassistant.data_entry_flow import FlowResult
 
-from .const import DOMAIN, CONF_TYPE_API, CONF_TYPE_BLE
+from .const import DOMAIN, CONF_TYPE, CONF_TYPE_API, CONF_TYPE_BLE
 from pathlib import Path
 
 class GoveeConfigFlow(ConfigFlow, domain=DOMAIN):
     VERSION = 1
-    CONNECTION_CLASS = config_entries.CONN_CLASS_CLOUD_POLL
+    CONNECTION_CLASS = getattr(config_entries, "CONN_CLASS_CLOUD_POLL", "cloud_poll")
 
     def __init__(self) -> None:
         """Initialize the config flow."""
