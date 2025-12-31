@@ -9,21 +9,12 @@ import bleak_retry_connector
 
 from bleak import BleakClient
 from homeassistant.components import bluetooth
-from homeassistant.components.light import (
-    ATTR_BRIGHTNESS,
-    ATTR_COLOR_TEMP_KELVIN,
-    ATTR_EFFECT,
-    ATTR_RGB_COLOR,
-    ColorMode,
-    LightEntity,
-    LightEntityFeature,
-)
+from homeassistant.components.light import (ATTR_BRIGHTNESS, ATTR_RGB_COLOR, ATTR_EFFECT, ColorMode, LightEntity,
+                                            LightEntityFeature, ATTR_COLOR_TEMP_KELVIN)
 
 from homeassistant.core import HomeAssistant
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.helpers.storage import Store
-from homeassistant.helpers.restore_state import RestoreEntity
-from homeassistant.const import STATE_ON
 import homeassistant.util.color as color_util
 
 from .const import DOMAIN
@@ -76,9 +67,7 @@ async def async_setup_entry(hass: HomeAssistant, config_entry: ConfigEntry, asyn
                 _LOGGER.info("Adding device: %s", device)
                 async_add_entities([GoveeAPILight(hub, device)])
     elif hub.address is not None:
-        ble_device = bluetooth.async_ble_device_from_address(hass, hub.address.upper(), True)
-        if ble_device is None:
-            ble_device = bluetooth.async_ble_device_from_address(hass, hub.address.upper(), False)
+        ble_device = bluetooth.async_ble_device_from_address(hass, hub.address.upper(), False)
         async_add_entities([GoveeBluetoothLight(hub, ble_device, config_entry)])
 
 
@@ -219,13 +208,11 @@ class GoveeAPILight(LightEntity, dict):
         self._state = False
 
 
-class GoveeBluetoothLight(LightEntity, RestoreEntity):
+class GoveeBluetoothLight(LightEntity):
     _attr_color_mode = ColorMode.RGB
     _attr_supported_color_modes = {ColorMode.RGB}
     _attr_supported_features = LightEntityFeature(
         LightEntityFeature.EFFECT | LightEntityFeature.FLASH | LightEntityFeature.TRANSITION)
-    _attr_assumed_state = True
-    _attr_should_poll = False
 
     def __init__(self, hub: Hub, ble_device, config_entry: ConfigEntry) -> None:
         """Initialize an bluetooth light."""
@@ -236,7 +223,6 @@ class GoveeBluetoothLight(LightEntity, RestoreEntity):
         self._ble_device = ble_device
         self._state = None
         self._brightness = None
-        self._rgb_color = None
 
     @property
     def effect_list(self) -> list[str] | None:
@@ -274,23 +260,6 @@ class GoveeBluetoothLight(LightEntity, RestoreEntity):
     def is_on(self) -> bool | None:
         """Return true if light is on."""
         return self._state
-
-    async def async_added_to_hass(self) -> None:
-        """Restore last known state."""
-        await super().async_added_to_hass()
-        last_state = await self.async_get_last_state()
-        if last_state is not None:
-            self._state = last_state.state == STATE_ON
-            self._brightness = last_state.attributes.get(ATTR_BRIGHTNESS)
-            self._rgb_color = last_state.attributes.get(ATTR_RGB_COLOR)
-            return
-
-        stored_state = await self._load_stored_state()
-        if stored_state is None:
-            return
-        self._state = stored_state.get("state")
-        self._brightness = stored_state.get("brightness")
-        self._rgb_color = stored_state.get("rgb_color")
 
     async def async_turn_on(self, **kwargs) -> None:
         commands = [self._prepareSinglePacketData(LedCommand.POWER, [0x1])]
@@ -343,64 +312,23 @@ class GoveeBluetoothLight(LightEntity, RestoreEntity):
                                                                       )):
                     commands.append(command)
 
-        client = await self._connectBluetooth()
-        try:
-            for command in commands:
-                await client.write_gatt_char(UUID_CONTROL_CHARACTERISTIC, command, False)
-        finally:
-            await client.disconnect()
-
-        await self._save_state()
+        for command in commands:
+            client = await self._connectBluetooth()
+            await client.write_gatt_char(UUID_CONTROL_CHARACTERISTIC, command, False)
 
     async def async_turn_off(self, **kwargs) -> None:
         client = await self._connectBluetooth()
-        try:
-            await client.write_gatt_char(UUID_CONTROL_CHARACTERISTIC,
-                                         self._prepareSinglePacketData(LedCommand.POWER, [0x0]), False)
-            self._state = False
-            await self._save_state()
-        finally:
-            await client.disconnect()
+        await client.write_gatt_char(UUID_CONTROL_CHARACTERISTIC,
+                                     self._prepareSinglePacketData(LedCommand.POWER, [0x0]), False)
+        self._state = False
 
     async def _connectBluetooth(self) -> BleakClient:
-        last_error: Exception | None = None
         for i in range(3):
             try:
-                if self._ble_device is None:
-                    self._ble_device = bluetooth.async_ble_device_from_address(
-                        self.hass,
-                        self._mac.upper(),
-                        True,
-                    )
-                    if self._ble_device is None:
-                        self._ble_device = bluetooth.async_ble_device_from_address(
-                            self.hass,
-                            self._mac.upper(),
-                            False,
-                        )
-                if self._ble_device is None:
-                    raise ConnectionError(
-                        f"Could not resolve BLE device with address {self._mac}"
-                    )
-                client = await bleak_retry_connector.establish_connection(
-                    BleakClient,
-                    self._ble_device,
-                    self.unique_id,
-                )
+                client = await bleak_retry_connector.establish_connection(BleakClient, self._ble_device, self.unique_id)
                 return client
-            except Exception as err:
-                last_error = err
-                self._ble_device = None
-                _LOGGER.debug(
-                    "Failed to connect to BLE device %s on attempt %s",
-                    self._mac,
-                    i + 1,
-                    exc_info=True,
-                )
+            except:
                 continue
-        raise ConnectionError(
-            f"Unable to connect to BLE device {self._mac}"
-        ) from last_error
 
     def _prepareSinglePacketData(self, cmd, payload):
         if not isinstance(cmd, int):
@@ -425,22 +353,3 @@ class GoveeBluetoothLight(LightEntity, RestoreEntity):
 
         frame += bytes([checksum & 0xFF])
         return frame
-
-    def _get_store(self) -> Store:
-        return Store(self.hass, 1, f"{DOMAIN}/ble_state_{self.unique_id}.json")
-
-    async def _load_stored_state(self) -> dict | None:
-        if self.hass is None:
-            return None
-        return await self._get_store().async_load()
-
-    async def _save_state(self) -> None:
-        if self.hass is None:
-            return
-        await self._get_store().async_save(
-            {
-                "state": self._state,
-                "brightness": self._brightness,
-                "rgb_color": self._rgb_color,
-            }
-        )
